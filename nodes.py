@@ -33,10 +33,8 @@ DEFAULT_IMAGE_MODELS = [
 DEFAULT_VIDEO_MODELS = ["grok-imagine-video", "grok-imagine-video-1.5-preview"]
 IMAGE_MODELS = list(DEFAULT_IMAGE_MODELS)
 VIDEO_MODELS = list(DEFAULT_VIDEO_MODELS)
-_MODEL_LIST_CACHE: dict[str, tuple[float, list[str], list[str], dict[str, str], dict[str, str]]] = {}
+_MODEL_LIST_CACHE: dict[str, tuple[float, list[str], list[str]]] = {}
 EXCLUDED_IMAGE_MODELS = {"grok-imagine-image-pro"}
-DEFAULT_IMAGE_MODEL_API_IDS = {model: model for model in DEFAULT_IMAGE_MODELS}
-DEFAULT_VIDEO_MODEL_API_IDS = {model: model for model in DEFAULT_VIDEO_MODELS}
 IMAGE_ASPECT_RATIOS = [
     "1:1",
     "2:3",
@@ -111,12 +109,10 @@ def _display_model_id(model_id: str) -> str:
     return model_id
 
 
-def _add_model_option(options: list[str], api_ids: dict[str, str], model_id: str) -> None:
+def _add_model_option(options: list[str], model_id: str) -> None:
     display_id = _display_model_id(model_id)
     if not display_id:
         return
-    if display_id not in api_ids:
-        api_ids[display_id] = model_id
     if display_id not in options:
         options.append(display_id)
 
@@ -130,15 +126,13 @@ def _is_video_model_id(model: str) -> bool:
     return _display_model_id(model).startswith("grok-imagine-video")
 
 
-def _model_ids_from_response(data: dict[str, Any]) -> tuple[list[str], list[str], dict[str, str], dict[str, str]]:
+def _model_ids_from_response(data: dict[str, Any]) -> tuple[list[str], list[str]]:
     items = data.get("data")
     if not isinstance(items, list):
-        return [], [], {}, {}
+        return [], []
 
     image_models: list[str] = []
     video_models: list[str] = []
-    image_api_ids: dict[str, str] = {}
-    video_api_ids: dict[str, str] = {}
     for item in items:
         if not isinstance(item, dict):
             continue
@@ -146,42 +140,33 @@ def _model_ids_from_response(data: dict[str, Any]) -> tuple[list[str], list[str]
         if isinstance(model_id, str) and model_id.strip():
             model_id = model_id.strip()
             if _is_image_model_id(model_id):
-                _add_model_option(image_models, image_api_ids, model_id)
+                _add_model_option(image_models, model_id)
             elif _is_video_model_id(model_id):
-                _add_model_option(video_models, video_api_ids, model_id)
-    return image_models, video_models, image_api_ids, video_api_ids
+                _add_model_option(video_models, model_id)
+    return image_models, video_models
 
 
-def _media_model_data(base_url: str = DEFAULT_PROXY_BASE_URL) -> tuple[list[str], list[str], dict[str, str], dict[str, str]]:
+def _media_model_options(base_url: str = DEFAULT_PROXY_BASE_URL) -> tuple[list[str], list[str]]:
     cache_key = _model_cache_key(base_url)
     now = time.monotonic()
     cached = _MODEL_LIST_CACHE.get(cache_key)
     if cached and now - cached[0] < MODEL_LIST_CACHE_SECONDS:
-        return list(cached[1]), list(cached[2]), dict(cached[3]), dict(cached[4])
+        return list(cached[1]), list(cached[2])
 
     image_models = list(DEFAULT_IMAGE_MODELS)
     video_models = list(DEFAULT_VIDEO_MODELS)
-    image_api_ids = dict(DEFAULT_IMAGE_MODEL_API_IDS)
-    video_api_ids = dict(DEFAULT_VIDEO_MODEL_API_IDS)
     try:
         data = _json_request("GET", cache_key, "/models", None, MODEL_LIST_TIMEOUT_SECONDS, DEFAULT_API_KEY)
-        live_image_models, live_video_models, live_image_api_ids, live_video_api_ids = _model_ids_from_response(data)
+        live_image_models, live_video_models = _model_ids_from_response(data)
         if live_image_models:
             image_models = live_image_models
-            image_api_ids = live_image_api_ids
         if live_video_models:
             video_models = live_video_models
-            video_api_ids = live_video_api_ids
     except RuntimeError:
         pass
 
-    _MODEL_LIST_CACHE[cache_key] = (now, image_models, video_models, image_api_ids, video_api_ids)
-    return list(image_models), list(video_models), dict(image_api_ids), dict(video_api_ids)
-
-
-def _media_model_options(base_url: str = DEFAULT_PROXY_BASE_URL) -> tuple[list[str], list[str]]:
-    image_models, video_models, _image_api_ids, _video_api_ids = _media_model_data(base_url)
-    return image_models, video_models
+    _MODEL_LIST_CACHE[cache_key] = (now, image_models, video_models)
+    return list(image_models), list(video_models)
 
 
 def _image_model_options(base_url: str = DEFAULT_PROXY_BASE_URL) -> list[str]:
@@ -200,9 +185,8 @@ def _default_model(options: list[str], preferred: str) -> str:
 
 
 def _resolve_media_model(model: str, kind: str, base_url: str) -> str:
-    image_models, video_models, image_api_ids, video_api_ids = _media_model_data(base_url)
+    image_models, video_models = _media_model_options(base_url)
     options = image_models if kind == "image" else video_models
-    api_ids = image_api_ids if kind == "image" else video_api_ids
     display_id = _display_model_id(model)
     if display_id not in options:
         available = ", ".join(options) if options else "none"
@@ -210,7 +194,7 @@ def _resolve_media_model(model: str, kind: str, base_url: str) -> str:
             f"{kind.title()} model {model!r} is not exposed by {_model_cache_key(base_url)}/models. "
             f"Available {kind} models: {available}"
         )
-    return api_ids.get(display_id, display_id)
+    return display_id
 
 
 def _walk_json(value: Any):
